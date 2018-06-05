@@ -36,6 +36,9 @@ Class {
 		'compilationContext',
 		'compilationContextClass'
 	],
+	#classInstVars : [
+		'overlayEnvironment'
+	],
 	#category : #'OpalCompiler-Core-FrontEnd'
 }
 
@@ -53,25 +56,43 @@ OpalCompiler class >> compilerSpecificSettingsOn: aBuilder [
 	
 ]
 
+{ #category : #overlay }
+OpalCompiler class >> createAndEnableOverlay [
+	^self overlayIsActive
+]
+
+{ #category : #overlay }
+OpalCompiler class >> createAndEnableOverlay: aBoolean [
+	
+	aBoolean = self overlayIsActive ifTrue: [ ^self ].
+	aBoolean 
+		ifTrue: [ self startUsingOverlayForDevelopment   ]
+		ifFalse: [ self stopUsingOverlayForDevelopment   ]
+]
+
 { #category : #public }
 OpalCompiler class >> debuggerMethodMapForMethod: aMethod [
 	^ DebuggerMethodMapOpal forMethod: aMethod
 ]
 
 { #category : #'old - deprecated' }
-OpalCompiler class >> evaluate: textOrString [ 
-	
-	^self new
+OpalCompiler class >> evaluate: textOrString [
+	self
+		deprecated: 'Please use new compiler API instead'
+		transformWith: '`@receiver evaluate: `@statements1 ' -> '`@receiver new source: `@statements1; evaluate'.
+	^ self new
 		source: textOrString;
 		evaluate
 ]
 
 { #category : #'old - deprecated' }
-OpalCompiler class >> evaluate: textOrString for: anObject logged: logFlag [ 
-	"See Compiler|evaluate:for:notifying:logged:. If a compilation error occurs, 
-	a Syntax Error view is created rather than notifying any requestor."
-
-	^self new
+OpalCompiler class >> evaluate: textOrString for: anObject logged: logFlag [
+	self
+		deprecated: 'Please use new compiler API instead'
+		transformWith:
+			'`@receiver evaluate: `@statements1 for: `@statements2 logged: `@statements3 '
+				-> '`@receiver new source: `@statements1; logged: `@statements3; receiver: `@statements2; evaluate.'.
+	^ self new
 		source: textOrString;
 		logged: logFlag;
 		receiver: anObject;
@@ -80,63 +101,71 @@ OpalCompiler class >> evaluate: textOrString for: anObject logged: logFlag [
 
 { #category : #'old - deprecated' }
 OpalCompiler class >> evaluate: textOrString for: anObject notifying: aController logged: logFlag [
-	"Compile and execute the argument, textOrString with respect to the class 
-	of anObject. If a compilation error occurs, notify aController. If both 
-	compilation and execution are successful then, if logFlag is true, log 
-	(write) the text onto a system changes file so that it can be replayed if 
-	necessary."
-
+	self
+		deprecated: 'Please use new compiler API instead'
+		transformWith:
+			'`@receiver evaluate: `@statements1 for: `@statements2 notifying: `@statements3 logged: `@statements4'
+				-> '`@receiver new source: `@statements1; logged: `@statements4; receiver: `@statements2; requestor: `@statements3; evaluate'.
 	^ self new
 		source: textOrString;
 		logged: logFlag;
 		receiver: anObject;
 		requestor: aController;
 		evaluate
-	
-			
 ]
 
 { #category : #'old - deprecated' }
-OpalCompiler class >> evaluate: textOrString logged: logFlag [ 
-	"See Compiler|evaluate:for:notifying:logged:. If a compilation error occurs, 
-	a Syntax Error view is created rather than notifying any requestor. 
-	Compilation is carried out with respect to nil, i.e., no object."
-
+OpalCompiler class >> evaluate: textOrString logged: logFlag [
+	self
+		deprecated: 'Please use new compiler API instead'
+		transformWith: '`@receiver evaluate: `@statements1 logged: `@statements2 ' -> '`@receiver new source: `@statements1; logged: `@statements2; evaluate.'.
 	^ self new
 		source: textOrString;
 		logged: logFlag;
 		evaluate
-	
-			
 ]
 
 { #category : #'old - deprecated' }
-OpalCompiler class >> evaluate: textOrString notifying: aController logged: logFlag [ 
-	"See Compiler|evaluate:for:notifying:logged:. Compilation is carried out 
-	with respect to nil, i.e., no object."
-
+OpalCompiler class >> evaluate: textOrString notifying: aController logged: logFlag [
+	self
+		deprecated: 'Please use new compiler API instead'
+		transformWith:
+			'`@receiver evaluate: `@statements1 notifying: `@statements2 logged: `@statements3'
+				-> '`@receiver new source: `@statements1; logged: `@statements3; requestor: `@statements2; evaluate'.
 	^ self new
 		source: textOrString;
 		logged: logFlag;
 		requestor: aController;
 		evaluate
-	
-			
 ]
 
 { #category : #'old - deprecated' }
 OpalCompiler class >> format: textOrStream in: aClass notifying: aRequestor [
-	^self new
+	self
+		deprecated: 'Please use new compiler API instead'
+		transformWith:
+			'`@receiver format: `@statements1 in: `@statements2 notifying: `@statements3'
+				-> '`@receiver new source: `@statements1; class: `@statements2; requestor: `@statements3; format'.
+	^ self new
 		source: textOrStream;
 		class: aClass;
 		requestor: aRequestor;
 		format
-		
 ]
 
 { #category : #public }
 OpalCompiler class >> isActive [
 	^Smalltalk compilerClass == self
+]
+
+{ #category : #overlay }
+OpalCompiler class >> overlayEnvironment [
+	^overlayEnvironment
+]
+
+{ #category : #overlay }
+OpalCompiler class >> overlayIsActive [
+	^overlayEnvironment notNil
 ]
 
 { #category : #public }
@@ -147,6 +176,46 @@ OpalCompiler class >> recompileAll [
 
 
 
+]
+
+{ #category : #overlay }
+OpalCompiler class >> startUsingOverlayForDevelopment [
+	"this method sets up an overlay so we can change the compiler package without breaking the compiler"
+
+	<script>
+	overlayEnvironment := Dictionary new.
+
+	"now we put a copy of all the classes of the compiler package into the environment"
+	self package definedClasses
+		do: [ :class | overlayEnvironment at: class name put: class copy ].
+
+	"now we recompile the classes in the environment with itself as an overlay"
+	overlayEnvironment valuesDo: [ :class | 
+			class methodsDo: [ :method | 
+					| newMethod |
+					newMethod := class compiler
+						bindings: overlayEnvironment;
+						compile: method sourceCode.
+					class addSelectorSilently: method selector withMethod: newMethod ] ].
+	
+	"make sure superclass pointers are correct"
+    overlayEnvironment valuesDo: [ :class | 
+        (overlayEnvironment includesKey: class superclass name) ifTrue: [  
+            class superclass: (overlayEnvironment at: class superclass name)]].
+	
+	"make the copy the default compiler for the image"
+	SmalltalkImage compilerClass: (overlayEnvironment at: #OpalCompiler).
+	ASTCache reset.
+]
+
+{ #category : #overlay }
+OpalCompiler class >> stopUsingOverlayForDevelopment [
+	"set compiler back to normal and throw away overlay environment"
+
+	<script>
+	SmalltalkImage compilerClass: nil.
+	overlayEnvironment := nil.
+	ASTCache reset
 ]
 
 { #category : #plugins }
@@ -351,7 +420,7 @@ OpalCompiler >> evaluate: textOrString for: anObject logged: logFlag [
 		transformWith:
 			'`@receiver evaluate: `@statements1 for: `@statements2 logged: `@statements3'
 				->
-					'`@receiver source: `@statements1; logged: `@statements2; receiver: `@statements3; evaluate'.
+					'`@receiver source: `@statements1; logged: `@statements3; receiver: `@statements2; evaluate'.
 	^ self
 		source: textOrString;
 		logged: logFlag;
