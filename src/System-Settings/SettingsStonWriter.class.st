@@ -45,6 +45,7 @@ SettingsStonWriter >> initialize [
 SettingsStonWriter >> store [
 	"Write the stored setting in the stream"
 
+
 	stream ifNil: [ ^ self ].
 	STON writer
 		on: stream;
